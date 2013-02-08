@@ -229,7 +229,6 @@ def get_reservation (instance_id):
 # main logic
 if __name__ == '__main__':
     conf = ConfParser.getparser().parse_args ()
-    print(conf)
 
     conf.tries = 5
     conf.test_instance_size = 't1.micro'
