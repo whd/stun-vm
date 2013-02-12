@@ -59,7 +59,9 @@ All of the above, chained so that only BASE_AMI_ID need be specified.""",
         parser.add_argument(
             '--size', help="instance size (default m1.small)")
         parser.add_argument(
-            '--ip', help="use elastic ip IP")
+            '--ip', help="use elastic ip IP (default allocates a new one)")
+        parser.add_argument(
+            '--az', help="specify availability zone (default unspecified)")
 
         parser.add_argument('region', metavar='REGION')
         parser.add_argument('action', metavar='ACTION', nargs='+')
@@ -122,9 +124,9 @@ def make_base_instance(conn, conf):
         exit(1)
 
     return conn.run_instances(
-        image_id = conf.base_ami_id,
-        instance_type = conf.test_instance_size,
-        security_groups = ['webrtc-stun-server'],
+        image_id=conf.base_ami_id,
+        instance_type=conf.test_instance_size,
+        security_groups=['webrtc-stun-server'],
         user_data=script()
     )
 
@@ -184,9 +186,10 @@ def make_ami(conn, conf, reservation):
 def make_instance(conn, conf, ami_id):
     """Make an actual stun-server instance using AMI_ID."""
     reservation = conn.run_instances(
-        image_id = ami_id,
-        instance_type = conf.prod_instance_size,
-        security_groups = ['webrtc-stun-server'],
+        image_id=ami_id,
+        placement=conf.az,
+        instance_type=conf.prod_instance_size,
+        security_groups=['webrtc-stun-server'],
     )
     instance = reservation.instances[0]
     print("tagging instance %s" % instance)
@@ -220,11 +223,25 @@ def tag (instance, tags):
     for key, val in tags.iteritems():
         instance.add_tag(key, val)
 
-def get_reservation (instance_id):
+def get_reservation (conn, instance_id):
     reservations = conn.get_all_instances(filters={'instance-id': instance_id})
     if len(reservations) == 0:
         print("error: couldn't find instance with id %s" % instance_id)
     return reservations[0]
+
+def get_region (conn, conf):
+    regions = boto.ec2.regions()
+    if conf.region not in [x.name for x in regions]:
+        print('error: no such region %s' % conf.region)
+        exit(1)
+    region = [x for x in regions if x.name == conf.region][0]
+    return region
+
+def check_availability_zone (conn, conf):
+    zones = conn.get_all_zones()
+    if conf.az is not None and conf.az not in [x.name for x in zones]:
+        print('error: no such region %s' % conf.region)
+        exit(1)
 
 # main logic
 if __name__ == '__main__':
@@ -233,16 +250,14 @@ if __name__ == '__main__':
     conf.tries = 5
     conf.test_instance_size = 't1.micro'
     conf.prod_instance_size = 'm1.small'
+    # fixme verify size is an acceptable value
     if conf.size is not None:
         conf.prod_instance_size = conf.size
 
-    regions = boto.ec2.regions()
-    if conf.region not in [x.name for x in regions]:
-        print('error: no such region %s' % conf.region)
-        exit(1)
-
-    region = [x for x in regions if x.name == conf.region][0]
+    region = get_region(conn, conf)
     conn = region.connect ()
+
+    check_availability_zone(conn, conf)
 
     if conf.action[0] == 'make-security-group':
         make_security_group(conn, conf)
@@ -250,13 +265,13 @@ if __name__ == '__main__':
         conf.base_ami_id = conf.action[1]
         make_base_instance(conn, conf)
     elif conf.action[0] == 'test-instance':
-        reservation = get_reservations(action[1])
+        reservation = get_reservation(conn, action[1])
         instance = reservation.instances[0]
         if not test_instance(conn, conf, instance):
             print("unable to verify working instance %s" % instance)
             exit(1)
     elif conf.action[0] == 'make-ami':
-        reservation = get_reservations(action[1])
+        reservation = get_reservation(conn, action[1])
         make_ami(conn, conf, reservation)
         print("AMI: %s" % ami_id)
     elif conf.action[0] == 'make-instance':
