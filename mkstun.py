@@ -6,11 +6,15 @@ from __future__ import print_function
 import sys
 import os
 import argparse
+import re
 import time
 from datetime import date
 
 import boto
 import boto.ec2
+import boto.ec2.cloudwatch
+import boto.sns
+
 from argparse import RawDescriptionHelpFormatter
 
 class ConfParser:
@@ -54,6 +58,8 @@ All of the above, chained so that only BASE_AMI_ID need be specified.""",
         parser.add_argument(
             '--enable-ssh', action='store_true',
             help="enable ssh access to the hosts")
+        parser.add_argument(
+            '--email', help="Email for SNS topic integration")
         parser.add_argument(
             '--env', help="Env tag (default prod)")
         parser.add_argument(
@@ -243,10 +249,47 @@ def check_availability_zone (conn, conf):
         print('error: no such region %s' % conf.region)
         exit(1)
 
+def create_sns_topic (conn2, conf):
+    """Create a webrtc-ops topic in this region if one does not already exist.
+conn2 is a connection to sns, NOT ec2."""
+    topics = conn2.get_all_topics()['ListTopicsResponse']['ListTopicsResult']['Topics']
+    topic = [x for x in topics if re.search('webrtc', x['TopicArn'])]
+
+    if any(topic):
+        print('sns topic %s already exists' % topic[0]['TopicArn'])
+        return topic[0]['TopicArn']
+    else:
+        print("create new topic for webrtc-ops")
+        response = conn2.create_topic('webrtc-ops')
+        arn = response['CreateTopicResponse']['CreateTopicResult']['TopicArn']
+        print("created topic %s" % arn)
+        return arn
+
+def create_subscription (conn2, conf, arn):
+    """... and associated subscription."""
+    subscriptions = conn2.get_all_subscriptions_by_topic(arn)
+    subscription = [x for x in subscriptions if x['Endpoint'] == conf.email)]
+    if any(subscription):
+        print("already have subscription for topic %s" % arn)
+    else:
+        if conf.email is None:
+            print("error, no email provided")
+            exit(1)
+        print('subscribing to topic %s' % arn)
+        conn2.subscribe(arn, 'email', conf.email)
+
+def create_alarm (conn2, conf, arn):
+    """... and associated alarm."""
+    alarm = metric.create_alarm(name=alarm_name, comparison=comparison,
+                                threshold=threshold, period=period,
+                                evaluationn_periods=eval_periods,
+                                statistics=statistics,
+                                alarm_actions=[topic_arn],
+                                ok_actions=[topic_arn])
+
 # main logic
 if __name__ == '__main__':
     conf = ConfParser.getparser().parse_args ()
-
     conf.tries = 5
     conf.test_instance_size = 't1.micro'
     conf.prod_instance_size = 'm1.small'
@@ -256,6 +299,7 @@ if __name__ == '__main__':
 
     region = get_region(conn, conf)
     conn = region.connect ()
+    conn2 = boto.sns.connect_to_region(conf.region)
 
     check_availability_zone(conn, conf)
 
