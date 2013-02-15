@@ -46,11 +46,20 @@ The stun-client binary is assumed to exist and be in $PATH.
 Stop TEST_INSTANCE (if running) and generate an AMI from the stopped instance.
 Assumes the instance was already tested for fitness previously.
 
-[make-instance AMI [--size SIZE] [--env ENV] [--cw] [--ip IP]]
+[make-instance AMI [--size SIZE] [--env ENV] [--ip IP]]
 
 Make an actual running instance of AMI. Assign tags as appropriate. With IP,
 set the elastic IP of this instance to IP (already allocated), otherwise
 allocate a new EIP and associate it with the instance.
+
+[create-sns-topic]
+Create an SNS topic for cloudwatch alerts.
+
+[create-subscription ARN]
+Subscribe an email to topic ARN (--email required).
+
+[create-alarm ARN INSTANCE]
+Create a health-check alarm for INSTANCE to publish to ARM.
 
 [all BASE_AMI_ID]
 All of the above, chained so that only BASE_AMI_ID need be specified.""",
@@ -126,15 +135,15 @@ def make_base_instance(conn, conf):
     """Make a base stun server instance using cloudinit."""
     if not conn.get_image(conf.base_ami_id):
         print("unable to find %s base AMI %s in %s" %
-              [conf.base_ami_id, conf.region])
+              (conf.base_ami_id, conf.region))
         exit(1)
 
-    return conn.run_instances(
+    return get_instance(conn.run_instances(
         image_id=conf.base_ami_id,
         instance_type=conf.test_instance_size,
         security_groups=['webrtc-stun-server'],
         user_data=script()
-    )
+    ))
 
 def stun_check (ip_or_dns):
     """What will become the Dynect health check for the service."""
@@ -149,20 +158,18 @@ def test_instance(conn, conf, reservation):
 
     if instance.state != 'pending' and instance.state != 'running':
         print("error: instance %s not pending or running (%s)" +
-              ", try starting it" % [instance, instance.state])
+              ", try starting it" % (instance, instance.state))
         exit(1)
-    while instance.state != 'pending':
-        print("test_instance is pending, sleeping 60s...")
+    while instance.state != 'running':
+        print("test_instance is %s, sleeping 60s..." % instance.state)
         time.sleep(60)
         instance.update()
-
-    print("sleeping an extra 2min to let cloudinit do its thing...")
-    time.sleep(60*2)
 
     i = 0
     while i <= conf.tries:
         if stun_check(instance.public_dns_name):
             print("stun check complete, instance is operational")
+            print(instance.id)
             return True
         print("test_instance failed, sleeping 60s and trying again...")
         i += 1
@@ -209,11 +216,12 @@ def make_instance(conn, conf, ami_id):
     if conf.ip is None:
         print("allocating a new elastic ip")
         addr = conn.allocate_address().public_ip
+        print("new address is %s" % addr)
     else:
         addr = conf.elastic_ip
 
     if not conn.associate_address(instance.id, addr):
-        print("unable to associate elastic ip %s with %s" % [addr, instance])
+        print("unable to associate elastic ip %s with %s" % (addr, instance))
         exit(1)
 
     instance.update()
@@ -235,7 +243,7 @@ def get_reservation (conn, instance_id):
         print("error: couldn't find instance with id %s" % instance_id)
     return reservations[0]
 
-def get_region (conn, conf):
+def get_region_connection(conf):
     regions = boto.ec2.regions()
     if conf.region not in [x.name for x in regions]:
         print('error: no such region %s' % conf.region)
@@ -267,25 +275,43 @@ conn2 is a connection to sns, NOT ec2."""
 
 def create_subscription (conn2, conf, arn):
     """... and associated subscription."""
-    subscriptions = conn2.get_all_subscriptions_by_topic(arn)
-    subscription = [x for x in subscriptions if x['Endpoint'] == conf.email)]
+    subscriptions = conn2.get_all_subscriptions_by_topic(arn)['ListSubscriptionsByTopicResponse']['ListSubscriptionsByTopicResult']['Subscriptions']
+    subscription = [x for x in subscriptions if x['Endpoint'] == conf.email]
     if any(subscription):
         print("already have subscription for topic %s" % arn)
+        return subscription[0]
     else:
         if conf.email is None:
             print("error, no email provided")
             exit(1)
         print('subscribing to topic %s' % arn)
-        conn2.subscribe(arn, 'email', conf.email)
+        return conn2.subscribe(arn, 'email', conf.email)
 
-def create_alarm (conn2, conf, arn):
+def create_alarm (conn3, conf, arn, instance_id):
     """... and associated alarm."""
-    alarm = metric.create_alarm(name=alarm_name, comparison=comparison,
-                                threshold=threshold, period=period,
-                                evaluationn_periods=eval_periods,
-                                statistics=statistics,
-                                alarm_actions=[topic_arn],
-                                ok_actions=[topic_arn])
+    mname = 'StatusCheckFailed'
+    metric = conn3.list_metrics(
+        dimensions={'InstanceId': instance_id},
+        # metric_name=mname
+    )
+
+    if any(metric):
+        metric = metric[0]
+    else:
+        print("error: metric %s not found for instance %s (wait a while?)" %
+              (mname, instance_id))
+        print("command to run is: \n%s %s create-alarm %s %s\n"
+              % (__file__, conf.region, arn, instance_id))
+        exit(1)
+    print(metric)
+    alarm = metric.create_alarm(name=mname, comparison='>=',
+                                threshold=1, period=300,
+                                evaluation_periods=2,
+                                statistic='Maximum',
+                                alarm_actions=[arn],
+                                # ok_actions=[topic_arn]
+    )
+    return alarm
 
 # main logic
 if __name__ == '__main__':
@@ -297,39 +323,50 @@ if __name__ == '__main__':
     if conf.size is not None:
         conf.prod_instance_size = conf.size
 
-    region = get_region(conn, conf)
+    region = get_region_connection(conf)
     conn = region.connect ()
-    conn2 = boto.sns.connect_to_region(conf.region)
+    sns_conn = boto.sns.connect_to_region(conf.region)
+    cw_conn = boto.ec2.cloudwatch.connect_to_region(conf.region)
 
     check_availability_zone(conn, conf)
 
+    # fixme make this suck less
     if conf.action[0] == 'make-security-group':
-        make_security_group(conn, conf)
+        print(make_security_group(conn, conf))
     elif conf.action[0] == 'make-base-instance':
         conf.base_ami_id = conf.action[1]
-        make_base_instance(conn, conf)
+        print(make_base_instance(conn, conf))
     elif conf.action[0] == 'test-instance':
-        reservation = get_reservation(conn, action[1])
+        reservation = get_reservation(conn, conf.action[1])
         instance = reservation.instances[0]
         if not test_instance(conn, conf, instance):
             print("unable to verify working instance %s" % instance)
             exit(1)
     elif conf.action[0] == 'make-ami':
-        reservation = get_reservation(conn, action[1])
-        make_ami(conn, conf, reservation)
+        reservation = get_reservation(conn, conf.action[1])
+        ami_id = make_ami(conn, conf, reservation)
         print("AMI: %s" % ami_id)
     elif conf.action[0] == 'make-instance':
-        make_instance(conn, conf, action[1])
+        make_instance(conn, conf, conf.action[1])
+    elif conf.action[0] == 'create-sns-topic':
+        print(create_sns_topic(sns_conn, conf))
+    elif conf.action[0] == 'create-subscription':
+        print(create_subscription(sns_conn, conf, conf.action[1]))
+    elif conf.action[0] == 'create-alarm':
+        print(create_alarm(cw_conn, conf, conf.action[1], conf.action[2]))
 
     if conf.action[0] != 'all':
         exit()
+    if conf.email is None:
+        print("--email required for ALL")
+        exit(1)
 
     conf.base_ami_id = conf.action[1]
 
     if conf.base_ami_id is None:
         print("base ami id required")
-    reservation = make_base_instance(conn, conf)
-    instance = reservation.instances[0]
+
+    instance = make_base_instance(conn, conf)
     if not test_instance(conn, conf, instance):
         print("unable to verify working instance %s" % instance)
         exit(1)
@@ -352,6 +389,14 @@ if __name__ == '__main__':
     print("terminate test instance")
     conn.terminate_instances(instance_ids=[instance.id])
 
+    print("create topic")
+    arn = create_sns_topic(sns_conn, conf)
+    print("subscribe to topic")
+    create_subscription(sns_conn, conf, arn)
+    print("adding alarm to topic")
+    create_alarm(cw_conn, conf, arn, instance2.id)
+
     print("instance %s running with public DNS %s" %
-          [instance2, instance2.public_dns_name])
+          (instance2, instance2.public_dns_name))
+
     print("All OK")
