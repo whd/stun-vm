@@ -181,9 +181,12 @@ def test_instance(conn, conf, reservation):
         time.sleep(60)
     return False
 
-def make_name():
+def make_name(regexp=False):
     """Generate a proper AMI name."""
-    today = date.today().strftime('%Y.%m.%d.1')
+    if regexp:
+        today = '.*'
+    else:
+        today = date.today().strftime('%Y.%m.%d.1')
     return "mozsvc-ami-pv-webrtcstun-%s.x86_64-ebs" % today
 
 def get_instance (res_or_instance):
@@ -194,8 +197,23 @@ def get_instance (res_or_instance):
         instance = res_or_instance
     return instance
 
+def check_ami (conn, conf, reservation):
+    images = conn.get_all_images(None, ['self'])
+    print(images)
+    i = [x for x in images if re.search(make_name(True), x.location)]
+    if any(i):
+        print("an AMI already exists: %s" % i[0])
+        # FIXME add a --force option to force a new ami (with a newer date), if
+        # we ever need to update our AMI.
+        return i[0]
+    else:
+        return False
+
 def make_ami(conn, conf, reservation):
     """Generate a golden AMI from the provided instance."""
+    check = check_ami(conn, conf, reservation)
+    if check:
+        return check
     instance = get_instance(reservation)
     return conn.create_image(instance.id,
                              make_name(), description="stun server")
@@ -245,6 +263,7 @@ def get_reservation (conn, instance_id):
     reservations = conn.get_all_instances(filters={'instance-id': instance_id})
     if len(reservations) == 0:
         print("error: couldn't find instance with id %s" % instance_id)
+        exit(1)
     return reservations[0]
 
 def get_region_connection(conf):
