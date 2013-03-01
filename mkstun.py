@@ -21,17 +21,18 @@ import boto.sns
 
 from argparse import RawDescriptionHelpFormatter
 
+
 class ConfParser:
     """Routines for parsing argument vector."""
     @staticmethod
-    def getparser ():
+    def getparser():
         parser = argparse.ArgumentParser(
             description="""stun server automated provisioning (via boto)
 Assumes AWS credentials are in ~/.boto or are otherwise present""",
-            epilog="""Use the "all" action (followed by a base instance id) to completely
-provision an instance in a new region. You must specify REGION for every
-invocation. Subcommand flags can be specified anywhere on the command line,
-since they do not intersect. The various subcommands/stages are work as
+            epilog="""Use the "all" action (followed by a base instance id) to
+completely provision an instance in a new region. You must specify REGION for
+every invocation. Subcommand flags can be specified anywhere on the command
+line, since they do not intersect. The various subcommands/stages are work as
 follows:
 
 [make-security-group]
@@ -86,7 +87,8 @@ All of the above, chained so that only BASE_AMI_ID need be specified.""",
         parser.add_argument('action', metavar='ACTION', nargs='+')
         return parser
 
-def get_tags (conf):
+
+def get_tags(conf):
     default = {
         'Env': 'prod',
         'Name': 'stun-server',
@@ -96,6 +98,7 @@ def get_tags (conf):
     if conf.env is not None:
         default['Env'] = conf.env
     return default
+
 
 def make_security_group(conn, conf):
     """Create a new security group and return it."""
@@ -118,6 +121,7 @@ def make_security_group(conn, conf):
     web.authorize('icmp', 8, -1, '0.0.0.0/0')
     return web
 
+
 def script():
     """Return the cloud-init script used to provision a stun AMI."""
     return """#!/bin/sh
@@ -130,10 +134,12 @@ rm -rf stun-vm
 rm /var/tmp/*.rpm
 """
 
-def keyname (conf):
+
+def keyname(conf):
     """Return the svcops keyname for this region."""
     # FIXME make sure this key exists
     return 'svcops-sl62-base-key-%s' % conf.region
+
 
 def make_base_instance(conn, conf):
     """Make a base stun server instance using cloudinit."""
@@ -149,11 +155,13 @@ def make_base_instance(conn, conf):
         user_data=script()
     ))
 
-def stun_check (ip_or_dns):
+
+def stun_check(ip_or_dns):
     """What will become the Dynect health check for the service."""
     # FIXME make sure stun-client exists (RPM is stun)
     print("running stun check (may hang) use ^C to interrupt")
-    return os.system("stun-client -v %s 1 2>&1 | grep mozilla" % ip_or_dns) == 0
+    return os.system("stun-client -v %s 1 2>&1 |grep mozilla" % ip_or_dns) == 0
+
 
 def test_instance(conn, conf, reservation):
     """Test a running stun server."""
@@ -181,6 +189,7 @@ def test_instance(conn, conf, reservation):
         time.sleep(60)
     return False
 
+
 def make_name(regexp=False):
     """Generate a proper AMI name."""
     if regexp:
@@ -189,7 +198,8 @@ def make_name(regexp=False):
         today = date.today().strftime('%Y.%m.%d.1')
     return "mozsvc-ami-pv-webrtcstun-%s.x86_64-ebs" % today
 
-def get_instance (res_or_instance):
+
+def get_instance(res_or_instance):
     """Return the single instance associated with a RES_OR_INSTANCE."""
     try:
         instance = res_or_instance.instances[0]
@@ -197,7 +207,8 @@ def get_instance (res_or_instance):
         instance = res_or_instance
     return instance
 
-def check_ami (conn, conf, reservation):
+
+def check_ami(conn, conf, reservation):
     images = conn.get_all_images(None, ['self'])
     print(images)
     i = [x for x in images if re.search(make_name(True), x.location)]
@@ -209,6 +220,7 @@ def check_ami (conn, conf, reservation):
     else:
         return False
 
+
 def make_ami(conn, conf, reservation):
     """Generate a golden AMI from the provided instance."""
     check = check_ami(conn, conf, reservation)
@@ -217,6 +229,7 @@ def make_ami(conn, conf, reservation):
     instance = get_instance(reservation)
     return conn.create_image(instance.id,
                              make_name(), description="stun server")
+
 
 def make_instance(conn, conf, ami_id):
     """Make an actual stun-server instance using AMI_ID."""
@@ -254,17 +267,20 @@ def make_instance(conn, conf, ami_id):
 
     return instance
 
-def tag (instance, tags):
+
+def tag(instance, tags):
     """Tag INSTANCE with TAGS, a dict."""
     for key, val in tags.iteritems():
         instance.add_tag(key, val)
 
-def get_reservation (conn, instance_id):
+
+def get_reservation(conn, instance_id):
     reservations = conn.get_all_instances(filters={'instance-id': instance_id})
     if len(reservations) == 0:
         print("error: couldn't find instance with id %s" % instance_id)
         exit(1)
     return reservations[0]
+
 
 def get_region_connection(conf):
     regions = boto.ec2.regions()
@@ -274,16 +290,19 @@ def get_region_connection(conf):
     region = [x for x in regions if x.name == conf.region][0]
     return region
 
-def check_availability_zone (conn, conf):
+
+def check_availability_zone(conn, conf):
     zones = conn.get_all_zones()
     if conf.az is not None and conf.az not in [x.name for x in zones]:
         print('error: no such region %s' % conf.region)
         exit(1)
 
-def create_sns_topic (conn2, conf):
+
+def create_sns_topic(conn2, conf):
     """Create a webrtc-ops topic in this region if one does not already exist.
 conn2 is a connection to sns, NOT ec2."""
-    topics = conn2.get_all_topics()['ListTopicsResponse']['ListTopicsResult']['Topics']
+    topics = conn2.get_all_topics()[
+        'ListTopicsResponse']['ListTopicsResult']['Topics']
     topic = [x for x in topics if re.search('webrtc', x['TopicArn'])]
 
     if any(topic):
@@ -296,9 +315,12 @@ conn2 is a connection to sns, NOT ec2."""
         print("created topic %s" % arn)
         return arn
 
-def create_subscription (conn2, conf, arn):
+
+def create_subscription(conn2, conf, arn):
     """... and associated subscription."""
-    subscriptions = conn2.get_all_subscriptions_by_topic(arn)['ListSubscriptionsByTopicResponse']['ListSubscriptionsByTopicResult']['Subscriptions']
+    subscriptions = conn2.get_all_subscriptions_by_topic(arn)[
+        'ListSubscriptionsByTopicResponse'][
+            'ListSubscriptionsByTopicResult']['Subscriptions']
     subscription = [x for x in subscriptions if x['Endpoint'] == conf.email]
     if any(subscription):
         print("already have subscription for topic %s" % arn)
@@ -310,7 +332,8 @@ def create_subscription (conn2, conf, arn):
         print('subscribing to topic %s' % arn)
         return conn2.subscribe(arn, 'email', conf.email)
 
-def create_alarm (conn3, conf, arn, instance_id):
+
+def create_alarm(conn3, conf, arn, instance_id):
     """... and associated alarm."""
     mname = 'StatusCheckFailed'
     metric = conn3.list_metrics(
@@ -333,12 +356,12 @@ def create_alarm (conn3, conf, arn, instance_id):
                                 statistic='Maximum',
                                 alarm_actions=[arn],
                                 # ok_actions=[topic_arn]
-    )
+                                )
     return alarm
 
 # main logic
 if __name__ == '__main__':
-    conf = ConfParser.getparser().parse_args ()
+    conf = ConfParser.getparser().parse_args()
     conf.tries = 5
     conf.test_instance_size = 't1.micro'
     conf.prod_instance_size = 'm1.small'
@@ -347,7 +370,7 @@ if __name__ == '__main__':
         conf.prod_instance_size = conf.size
 
     region = get_region_connection(conf)
-    conn = region.connect ()
+    conn = region.connect()
     sns_conn = boto.sns.connect_to_region(conf.region)
     cw_conn = boto.ec2.cloudwatch.connect_to_region(conf.region)
 
