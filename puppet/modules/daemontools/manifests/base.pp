@@ -1,17 +1,11 @@
 class daemontools::base {
-  $daemontools_rpm = 'daemontools-0.76-1moz.x86_64.rpm'
-  file {
-    "/var/tmp/${daemontools_rpm}":
-      ensure => present,
-      source => "puppet:///modules/${module_name}/${daemontools_rpm}",
-  }
+  $daemontools_version = '0.76-1moz'
+  realize Yumrepo['mozilla']
 
   package {
     'daemontools':
-      ensure   => installed,
-      provider => 'rpm',
-      source   => "file:///var/tmp/${daemontools_rpm}",
-      require  => File["/var/tmp/${daemontools_rpm}"];
+      ensure   => $daemontools_version,
+      require  => Yumrepo['mozilla'];
   }
 
   # RHEL6 upstart isn't backwards compatible with inittab,

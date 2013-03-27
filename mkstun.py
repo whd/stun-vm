@@ -29,10 +29,10 @@ class ConfParser:
             description="""stun server automated provisioning (via boto)
 Assumes AWS credentials are in ~/.boto or are otherwise present""",
             epilog="""Use the "all" action (followed by a base instance id) to
-completely provision an instance in a new region. You must specify REGION for
-every invocation. Subcommand flags can be specified anywhere on the command
-line, since they do not intersect. The various subcommands/stages are work as
-follows:
+completely provision an instance in a new region. You must specify REGION and
+PROFILE for every invocation. Subcommand flags can be specified anywhere on the
+command line, since they do not intersect. The various subcommands/stages are
+work as follows:
 
 [make-security-group]
 Make the security group for the stun server (if non-existent).
@@ -82,6 +82,7 @@ All of the above, chained so that only BASE_AMI_ID need be specified.""",
         parser.add_argument(
             '--az', help="specify availability zone (default unspecified)")
 
+        parser.add_argument('profile_name', metavar='PROFILE')
         parser.add_argument('region', metavar='REGION')
         parser.add_argument('action', metavar='ACTION', nargs='+')
         return parser
@@ -128,9 +129,11 @@ def script():
 yum install -y puppet git
 cd /tmp
 git clone https://github.com/whd/stun-vm
+cd stun-vm
+git checkout moz
+cd -
 puppet apply --modulepath=stun-vm/puppet/modules stun-vm/puppet/bootstrap.pp
 rm -rf stun-vm
-rm /var/tmp/*.rpm
 """
 
 
@@ -150,6 +153,7 @@ def make_base_instance(conn, conf):
     return get_instance(conn.run_instances(
         image_id=conf.base_ami_id,
         instance_type=conf.test_instance_size,
+        instance_profile_name=conf.profile_name,
         security_groups=['webrtc-stun-server'],
         user_data=script()
     ))
@@ -364,6 +368,7 @@ if __name__ == '__main__':
     conf.tries = 5
     conf.test_instance_size = 't1.micro'
     conf.prod_instance_size = 'm1.small'
+
     # fixme verify size is an acceptable value
     if conf.size is not None:
         conf.prod_instance_size = conf.size
