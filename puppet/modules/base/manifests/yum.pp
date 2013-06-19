@@ -1,29 +1,7 @@
-class base::yum {
-
-  @yumrepo { 'epel':
-    mirrorlist     =>
-    'https://mirrors.fedoraproject.org/metalink?repo=epel-6&arch=$basearch',
-    descr          => 'Extra Packages for Enterprise Linux 6 - $basearch',
-    enabled        => 1,
-    gpgcheck       => 1,
-    failovermethod => priority,
-    gpgkey         => 'file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-6',
+class base::yum($moz_repocontent = undef){
+  @file { 'mozilla-services-aws':
+    ensure  => file,
+    path    => '/etc/yum.repos.d/mozilla-services-aws.repo',
+    content => $moz_repocontent,
   }
-
-  @yumrepo { 'mozilla':
-    baseurl        => 'https://s3-us-west-2.amazonaws.com/rpm-repo/6/$basearch',
-    descr          => 'Mozilla Packages',
-    enabled        => 1,
-    priority       => 1,
-    gpgcheck       => 0,
-    failovermethod => priority,
-  }
-  @yumrepo { 'mozilla-source':
-    baseurl        => 'https://s3-us-west-2.amazonaws.com/rpm-repo/6/SRPMS',
-    descr          => 'Mozilla Source Packages',
-    enabled        => 1,
-    gpgcheck       => 0,
-    failovermethod => priority,
-  }
-
 }
