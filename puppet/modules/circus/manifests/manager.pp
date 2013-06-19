@@ -30,7 +30,6 @@ class circus::manager(
       ensure  => $circus_version,
       alias   => 'circus',
       notify  => Exec['circus-initctl-reload'],
-      require => File['mozilla-services-aws'];
   }
 
   # Our puppet doesn't have an upstart service provider, yet. Sigh.

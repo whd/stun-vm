@@ -1,12 +1,10 @@
 class stun_server {
-  include base::yum
   $rpm_version = '0.96-6svc.amzn1'
   realize(File['mozilla-services-aws'])
 
   package {
     'stun-server':
       ensure   => $rpm_version,
-      require  => File['mozilla-services-aws'],
   }
 
   circus::watcher {
