@@ -1,6 +1,5 @@
 class stun_server {
   $rpm_version = '0.96-6svc.amzn1'
-  realize(File['mozilla-services-aws'])
 
   package {
     'stun-server':
